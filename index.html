@@ -254,6 +254,9 @@ svg{display:block}
   color:var(--pinkt);font-weight:700;padding:10px 17px;border-radius:99px;font-size:13px;opacity:0;pointer-events:none;
   box-shadow:0 6px 18px rgba(214,150,175,.34);transition:opacity .2s,transform .2s}
 #toast.on{opacity:1;transform:translate(-50%,0)}
+#saveStatus{position:absolute;left:12px;top:76px;z-index:45;background:#fff8fb;color:#8a6274;
+  border-radius:12px;padding:6px 10px;font-size:11px;max-width:calc(100% - 24px)}
+#saveStatus[data-state="error"]{background:#fff0f0;color:#a43f57}
 @media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important;animation:none!important}}
 </style>
 </head>
@@ -326,8 +329,10 @@ svg{display:block}
 
 <input type="file" id="file" accept="image/*" hidden>
 <span id="syncDot">동기화 중…</span>
+<button id="saveStatus" type="button" aria-live="polite" disabled hidden>기기 저장 준비됨</button>
 <div id="toast"></div>
 
+<script src="diary-store.js"></script>
 <script>
 window.addEventListener("error",function(e){
   var b=document.createElement("div");
@@ -463,12 +468,26 @@ if(/^sb_secret_|service_role/.test(CLOUD.key)){
 function cloudReady(){ return !!(CLOUD.url&&CLOUD.key); }
 
 var mem={},hasStore=!!window.storage;
+var guestDiary=MonggleDiaryStore.createStore(window.indexedDB);
+var guestReadFailed=false;
+function guestKey(k){ return !hasStore&&!USER&&!cloudOn()&&MonggleDiaryStore.diaryKey(k); }
+function saveState(state){
+  if(!guestKey("dy:"+dkey(today))) return;
+  if(guestReadFailed) state="readError";
+  var e=$("saveStatus"); e.hidden=false; e.dataset.state=state;
+  e.textContent=({pending:"저장 대기 중…",saving:"기기에 저장 중…",saved:"기기에 저장됨",
+    error:"저장하지 못했어요 · 다시 시도",readError:"기록을 읽지 못했어요 · 다시 열어 주세요",
+    prefError:"펜 설정 저장 실패 · 다시 선택해 주세요"})[state]||"기기 저장 준비됨";
+  e.disabled=state!=="error";
+}
 function localGet(k){
+  if(guestKey(k)) return guestDiary.get(k).catch(function(){ guestReadFailed=true; saveState("readError"); return null; });
   if(!hasStore) return Promise.resolve(k in mem?mem[k]:null);
   return window.storage.get(k).then(function(r){ return r&&r.value?JSON.parse(r.value):null; })
     .catch(function(){ return k in mem?mem[k]:null; });
 }
 function localSet(k,v){
+  if(guestKey(k)) return guestDiary.set(k,v).then(function(){ return true; },function(){ saveState("prefError"); return false; });
   mem[k]=v;
   if(!hasStore) return Promise.resolve();
   return window.storage.set(k,JSON.stringify(v)).catch(function(){});
@@ -549,6 +568,7 @@ var store={
     });
   },
   set:function(k,v){
+    if(guestKey(k)) return localSet(k,v);
     localSet(k,v);
     if(cloudOn()) sbSet(k,v);
     return Promise.resolve();
@@ -1037,6 +1057,8 @@ function eraseAt(p){
 
 /* ================= 저장 ================= */
 var saveT;
+var diarySaver=MonggleDiaryStore.createSaver(function(job){ return guestDiary.saveDay(job); },saveState);
+$("saveStatus").onclick=function(){ if(this.dataset.state==="error") diarySaver.flush(); };
 function commitPage(){
   if(!D.pages.length) D.pages=[{}];
   var p=D.pages[D.pi]||(D.pages[D.pi]={});
@@ -1045,6 +1067,13 @@ function commitPage(){
 }
 function saveDay(){
   commitPage();
+  if(guestKey(K("dy:"+D.key))){
+    var used=D.pages.some(function(p){ return (p.items&&p.items.length)||(p.strokes&&p.strokes.length)||(p.memo&&p.memo.trim()); });
+    diarySaver.schedule({key:K("dy:"+D.key),monthKey:K("dm:"+D.key.slice(0,7)),
+      day:{weather:D.weather,mood:D.mood,pages:D.pages},
+      summary:(used||D.weather||D.mood)?{c:D.pages[0].paper||D.paper,w:D.weather,m:D.mood,n:D.pages.length}:null});
+    return;
+  }
   clearTimeout(saveT);
   saveT=setTimeout(function(){
     store.set(K("dy:"+D.key),{weather:D.weather,mood:D.mood,pages:D.pages});
@@ -2138,6 +2167,7 @@ function signOut(){
   showAuth();
 }
 function boot(){
+  $("saveStatus").hidden=!guestKey("dy:"+dkey(today));
   return store.get(K("pen:prefs")).then(function(pf){
     T.saved={gel:[],pencil:[],hl:[],eraser:[]}; T.myColors=[]; T.stickerOrder=null; T.memoSize=17;
     if(pf){ if(pf.saved) T.saved=pf.saved; if(pf.colors) T.myColors=pf.colors;
