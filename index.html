@@ -257,6 +257,8 @@ svg{display:block}
 #saveStatus{position:absolute;left:12px;top:76px;z-index:45;background:#fff8fb;color:#8a6274;
   border-radius:12px;padding:6px 10px;font-size:11px;max-width:calc(100% - 24px)}
 #saveStatus[data-state="error"]{background:#fff0f0;color:#a43f57}
+#dayLoadStatus{position:absolute;left:12px;top:108px;z-index:45;background:#fff8fb;color:#8a6274;
+  border-radius:12px;padding:6px 10px;font-size:11px;max-width:calc(100% - 24px)}
 @media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important;animation:none!important}}
 </style>
 </head>
@@ -330,6 +332,7 @@ svg{display:block}
 <input type="file" id="file" accept="image/*" hidden>
 <span id="syncDot">동기화 중…</span>
 <button id="saveStatus" type="button" aria-live="polite" disabled hidden>기기 저장 준비됨</button>
+<span id="dayLoadStatus" role="status" hidden>일기를 불러오는 중…</span>
 <div id="toast"></div>
 
 <script src="diary-store.js"></script>
@@ -1056,7 +1059,7 @@ function eraseAt(p){
 }
 
 /* ================= 저장 ================= */
-var saveT;
+var saveT, dayLoadSeq=0, dayLoading=false;
 var diarySaver=MonggleDiaryStore.createSaver(function(job){ return guestDiary.saveDay(job); },saveState);
 $("saveStatus").onclick=function(){ if(this.dataset.state==="error") diarySaver.flush(); };
 function commitPage(){
@@ -1066,6 +1069,7 @@ function commitPage(){
   p.memo=$("bodyMemo").value;
 }
 function saveDay(){
+  if(dayLoading) return;
   commitPage();
   if(guestKey(K("dy:"+D.key))){
     var used=D.pages.some(function(p){ return (p.items&&p.items.length)||(p.strokes&&p.strokes.length)||(p.memo&&p.memo.trim()); });
@@ -1098,15 +1102,31 @@ function blankPage(){ return {paper:PAPERC[1],pattern:"line",items:[],strokes:[]
   });
 })();
 function loadDay(key){
+  var seq=++dayLoadSeq, storageKey=K("dy:"+key);
   D.key=key;
-  return store.get(K("dy:"+key)).then(function(d){
+  dayLoadState(true);
+  return Promise.resolve().then(function(){ return store.get(storageKey); }).then(function(d){
+    if(seq!==dayLoadSeq || storageKey!==K("dy:"+D.key)) return;
     D.weather=(d&&d.weather)||null;
     D.mood=(d&&d.mood)||null;
     if(d&&d.pages&&d.pages.length) D.pages=d.pages;
     else if(d) D.pages=[{paper:d.paper||PAPERC[1],pattern:d.pattern||"line",items:d.items||[],strokes:d.strokes||[],memo:d.memo||""}];
     else D.pages=[blankPage()];
     setPage(0);
+    dayLoadState(false);
+  }).catch(function(){
+    if(seq!==dayLoadSeq) return;
+    // Keep stale content read-only when the current read could not complete.
+    $("dayLoadStatus").textContent="일기를 읽지 못했어요 · 다시 열어 주세요";
   });
+}
+function dayLoadState(loading){
+  dayLoading=loading;
+  ["book","dockwrap","undoBtn","redoBtn","saveBtn"].forEach(function(id){ $(id).inert=loading; });
+  $("bodyMemo").readOnly=loading;
+  $("book").setAttribute("aria-busy",String(loading));
+  $("dayLoadStatus").hidden=!loading;
+  if(loading) $("dayLoadStatus").textContent="일기를 불러오는 중…";
 }
 function setPage(i){
   D.pi=clamp(i,0,D.pages.length-1);

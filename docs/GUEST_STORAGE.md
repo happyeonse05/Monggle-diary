@@ -41,3 +41,29 @@ power-loss durability and iPhone Safari need separate validation. The old
 offline-account password-hash fallback was not redesigned or made persistent
 by this change; it is not a secure replacement for server authentication.
 No production account or data is copied or written by the tests.
+
+## Date reads and pending edits
+
+Each `loadDay` request has a generation and captures its storage key. Only the
+latest request for the current key/scope can update the page. An older response
+cannot replace a newer date or unlock its pending editor, including when the same
+date is requested twice. This prevents a later edit from copying the old day's
+page fields into the newly selected day's record.
+
+While the current read is pending, the book, drawing/tools, page controls,
+undo/redo and image export are inert, the memo is read-only, and the central
+`saveDay` function ignores queued edit events. Date/calendar navigation remains
+available; an already queued guest autosave retains its earlier frozen snapshot.
+The status announces loading and the book exposes `aria-busy`. A current rejected
+read (or render exception) leaves the editor locked with a reopen notice; stale
+failures cannot relock a successfully loaded day. The existing guest store's own
+read-error write lock still requires a full reload, even if `localGet` converts
+its error to a null display value. This change does not repair damaged records.
+
+Tests exercise the actual HTML load/save functions, including out-of-order and
+same-date responses, pending writes, rejected/synchronous reads and scope changes.
+Synthetic PC/mobile Chromium tests reproduce the old stale-page overwrite and
+pending-input write, then check preserved IndexedDB content and save/reload.
+Real Safari, production login/logout, account authorization and the old cloud
+save timer are not validated or redesigned here. Import/export backup, multiple
+tabs and already-running file/animation callbacks need separate work.
